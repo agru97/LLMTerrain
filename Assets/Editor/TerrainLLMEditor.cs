@@ -73,6 +73,22 @@ public class TerrainLLMEditor : Editor
                 Repaint();
             }
         }
+
+        // Clean Up button
+        GUI.enabled = !isProcessing;
+        if (GUILayout.Button("Clean Up", GUILayout.Height(30)))
+        {
+            try
+            {
+                controller.CleanUpTerrain();
+                EditorUtility.SetDirty(controller.gameObject.GetComponent<Terrain>());
+                SceneView.RepaintAll();
+            }
+            catch (System.Exception e)
+            {
+                EditorUtility.DisplayDialog("Error", $"Failed to clean up terrain: {e.Message}", "OK");
+            }
+        }
         GUI.enabled = true;
 
         if (serializedObject.hasModifiedProperties)

@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using System.Text;
 using System.IO;
 using System.Linq;
+using UnityEditor;
+using System.Collections.Generic;
 
 [ExecuteInEditMode]
 public class LLMController : MonoBehaviour
@@ -111,20 +113,14 @@ public class LLMController : MonoBehaviour
                         Base Terrain Generators (If you want to use them, use these first):
                         
                         Voronoi(fallOff=0.0-10.0, dropOff=0.0-10.0, minHeight=0-1.0, maxHeight=0.0-1.0, peaks=1-10)
-                        - Creates mountain peaks and rocky terrain
+                        - Creates normal mountain peaks
                         - Higher fallOff = steeper peaks
 
-                        MidPointDisplacement(heightMin=-2.0-0, heightMax=0-2.0, roughness=1.0-5.0)
-                        - Creates natural-looking varied terrain
-                        - Higher roughness = more jagged terrain
+                        MidPointDisplacement(heightMin=-0-1, heightMax=0-1, smoothness=0.5-1.0)
+                        - Creates natural-looking varied terrain, or sharp rocky jagged terrain
+                        - lower smoothness = sharp jagged terrain
 
                         Terrain Modifiers and Erosion:
-
-                        RainErosion(droplets=10-1000, erosionStrength=0.1-1.0, iterations=1-10)
-                        - Simulates rainfall erosion
-                        - More droplets = more detailed erosion
-                        - Higher strength = deeper erosion channels
-                        - More iterations = stronger erosion effect
 
                         ThermalErosion(erosionStrength=0.1-1.0, erosionAmount=0.01-0.1, iterations=1-20)
                         - Simulates rock crumbling and settling
@@ -148,6 +144,13 @@ public class LLMController : MonoBehaviour
                         AddWater(height=0.0-1.0)
                         - ONLY use if water is clearly visible in the image
                         - Height must be relative to terrain features (0-1 range)
+
+                        AddSplatMaps(texture1Height=0-1.0,texture1Color=#RRGGBB,texture1Offset=0.05-0.2,texture2Height=0-1.0,texture2Color=#RRGGBB,texture2Offset=0.05-0.2,texture3Height=0-1.0,texture3Color=#RRGGBB,texture3Offset=0.05-0.2)
+                        - Applies 1-3 color(s) to different height ranges of the terrain
+                        - Specify 1-3 height ranges, colors (hex format), and blend offsets
+                        - Do not mistake the water in the image for a texture
+                        - Heights must be in ascending order
+                        - Offset controls how much textures blend (higher = more blending)
                         ";
 
         return $@"{{
@@ -230,13 +233,7 @@ public class LLMController : MonoBehaviour
             }
         }
 
-        // Clean up
-        GameObject existingWater = GameObject.Find("water");
-        if (existingWater != null)
-        {
-            DestroyImmediate(existingWater);
-        }
-        terrainGenerator.ResetTerrain();
+        CleanUpTerrain();
         
         // Split commands into method calls
         string[] methodCalls = commands.Split(';')
@@ -305,26 +302,15 @@ public class LLMController : MonoBehaviour
                     break;
 
                 case "MidPointDisplacement":
-                    terrainGenerator.MPDHeightMin = ClampParameter(float.Parse(paramDict["heightMin"]), -2f, 0f, "heightMin");
-                    terrainGenerator.MPDHeightMax = ClampParameter(float.Parse(paramDict["heightMax"]), 0f, 2f, "heightMax");
-                    terrainGenerator.MPDRoughness = ClampParameter(float.Parse(paramDict["roughness"]), 1f, 5f, "roughness");
+                    terrainGenerator.MPDHeightMin = ClampParameter(float.Parse(paramDict["heightMin"]), 0, 1f, "heightMin");
+                    terrainGenerator.MPDHeightMax = ClampParameter(float.Parse(paramDict["heightMax"]), 0f, 1f, "heightMax");
+                    terrainGenerator.MPDRoughness = ClampParameter(float.Parse(paramDict["smoothness"]), 0.5f, 1f, "smoothness");
                     terrainGenerator.MidPointDisplacement();
                     break;
 
                 case "Smooth":
                     terrainGenerator.smoothAmount = (int)ClampParameter(float.Parse(paramDict["smoothAmount"]), 1f, 10f, "smoothAmount");
                     terrainGenerator.Smooth();
-                    break;
-
-                case "RainErosion":
-                    terrainGenerator.droplets = (int)ClampParameter(float.Parse(paramDict["droplets"]), 10f, 1000f, "droplets");
-                    terrainGenerator.erosionStrength = ClampParameter(float.Parse(paramDict["erosionStrength"]), 0.1f, 1.0f, "erosionStrength");
-                    terrainGenerator.erosionType = CustomTerrain.ErosionType.Rain;
-                    terrainGenerator.erosionIterations = (int)ClampParameter(float.Parse(paramDict["iterations"]), 1f, 10f, "iterations");
-                    for (int i = 0; i < terrainGenerator.erosionIterations; i++)
-                    {
-                        terrainGenerator.Erode();
-                    }
                     break;
 
                 case "ThermalErosion":
@@ -364,6 +350,88 @@ public class LLMController : MonoBehaviour
                     terrainGenerator.AddWater();
                     break;
 
+                case "AddSplatMaps":
+                    int textureCount = paramDict.Count / 3; // height, color, and offset for each texture
+                    terrainGenerator.splatHeights.Clear();
+                    
+                    // Create TerrainLayer array
+                    TerrainLayer[] terrainLayers = new TerrainLayer[textureCount];
+                    
+                    // Sort the textures by height to ensure proper layering
+                    var heightPairs = new List<(int index, float height)>();
+                    for (int i = 0; i < textureCount; i++) {
+                        float height = ClampParameter(float.Parse(paramDict[$"texture{i+1}Height"]), 0f, 1f, $"texture{i+1}Height");
+                        heightPairs.Add((i, height));
+                    }
+                    heightPairs.Sort((a, b) => a.height.CompareTo(b.height));
+                    
+                    for (int i = 0; i < textureCount; i++) {
+                        int originalIndex = heightPairs[i].index;
+                        float height = heightPairs[i].height;
+                        string colorHex = paramDict[$"texture{originalIndex+1}Color"].TrimStart('#');
+                        float offset = ClampParameter(float.Parse(paramDict[$"texture{originalIndex+1}Offset"]), 0.05f, 0.2f, $"texture{originalIndex+1}Offset");
+                        
+                        // Convert hex to RGB
+                        Color color = new Color(
+                            Convert.ToInt32(colorHex.Substring(0, 2), 16) / 255f,
+                            Convert.ToInt32(colorHex.Substring(2, 2), 16) / 255f,
+                            Convert.ToInt32(colorHex.Substring(4, 2), 16) / 255f
+                        );
+                        
+                        // Create texture with more resolution
+                        Texture2D tex = new Texture2D(512, 512, TextureFormat.RGB24, false);
+                        Color[] colors = new Color[512 * 512];
+                        for (int p = 0; p < colors.Length; p++) {
+                            colors[p] = color;
+                        }
+                        tex.SetPixels(colors);
+                        tex.Apply();
+                        
+                        // Create and save TerrainLayer
+                        TerrainLayer terrainLayer = new TerrainLayer();
+                        terrainLayer.diffuseTexture = tex;
+                        terrainLayer.tileSize = new Vector2(50, 50);
+                        terrainLayer.tileOffset = Vector2.zero;
+                        terrainLayer.specular = Color.white;
+                        terrainLayer.metallic = 0f;
+                        terrainLayer.smoothness = 0f;
+                        
+                        // Save assets
+                        string texPath = $"Assets/TerrainTexture_{i}.asset";
+                        AssetDatabase.CreateAsset(tex, texPath);
+                        
+                        string layerPath = $"Assets/TerrainLayer_{i}.terrainlayer";
+                        AssetDatabase.CreateAsset(terrainLayer, layerPath);
+                        AssetDatabase.SaveAssets();
+                        
+                        terrainLayers[i] = terrainLayer;
+                        
+                        // Add to splatHeights with proper height ranges
+                        terrainGenerator.splatHeights.Add(new CustomTerrain.SplatHeights {
+                            texture = tex,
+                            minHeight = height,
+                            maxHeight = (i < textureCount - 1) ? heightPairs[i + 1].height : 1.0f,
+                            splatOffset = offset,
+                            tileSize = new Vector2(50, 50),
+                            minSlope = 0,
+                            maxSlope = 90 // Allow texture on any slope
+                        });
+                    }
+                    
+                    // Set the TerrainLayers through the Terrain component
+                    Terrain terrain = terrainGenerator.GetComponent<Terrain>();
+                    terrain.terrainData.terrainLayers = terrainLayers;
+                    
+                    // Force terrain to update its material
+                    terrain.materialTemplate = new Material(Shader.Find("Universal Render Pipeline/Terrain/Lit"));
+                    
+                    // Use existing SplatMaps method
+                    terrainGenerator.SplatMaps();
+                    
+                    // Force terrain update
+                    terrain.Flush();
+                    break;
+
                 default:
                     Debug.LogWarning($"Unknown method: {methodName}");
                     break;
@@ -382,19 +450,35 @@ public class LLMController : MonoBehaviour
 
         if (!string.IsNullOrEmpty(lastCommands))
         {
-            // Clean up
-            GameObject existingWater = GameObject.Find("water");
-            if (existingWater != null)
-            {
-                DestroyImmediate(existingWater);
-            }
-            terrainGenerator.ResetTerrain();
-            
+            CleanUpTerrain();
             ExecuteTerrainCommands(lastCommands);
         }
         else
         {
             Debug.LogWarning("No previous commands to reapply");
         }
+    }
+
+    public void CleanUpTerrain()
+    {
+        // Remove water
+        GameObject existingWater = GameObject.Find("water");
+        if (existingWater != null)
+        {
+            DestroyImmediate(existingWater);
+        }
+
+        // Clear splat maps and terrain layers
+        Terrain terrain = terrainGenerator.GetComponent<Terrain>();
+        if (terrain != null && terrain.terrainData != null)
+        {
+            terrainGenerator.splatHeights.Clear();
+            // Add at least one empty splat height to prevent null reference
+            terrainGenerator.splatHeights.Add(new CustomTerrain.SplatHeights());
+            terrain.terrainData.terrainLayers = new TerrainLayer[0];
+        }
+
+        // Reset terrain heights
+        terrainGenerator.ResetTerrain();
     }
 } 

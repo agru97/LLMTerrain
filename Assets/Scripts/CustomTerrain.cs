@@ -614,7 +614,7 @@ public class CustomTerrain : MonoBehaviour {
             waterHeight * terrainData.size.y,
             terrainData.size.z / 2.0f);
 
-        //water.transform.localScale = new Vector3(terrainData.size.x, 1.0f, terrainData.size.z);
+        water.transform.localScale = new Vector3(terrainData.size.x, 1.0f, terrainData.size.z);
     }
 
     public void PlantVegetation() {
