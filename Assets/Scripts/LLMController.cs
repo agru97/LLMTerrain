@@ -141,9 +141,10 @@ public class LLMController : MonoBehaviour
                         - Softens terrain features
                         - Higher amount = smoother result
 
-                        AddWater(height=0.0-1.0)
+                        AddWater(height=0.0-1.0,color=#RRGGBB)
                         - ONLY use if water is clearly visible in the image
                         - Height must be relative to terrain features (0-1 range)
+                        - color should be a hex color code matching the water in the image
 
                         AddSplatMaps(texture1Height=0-1.0,texture1Color=#RRGGBB,texture1Offset=0.05-0.2,texture2Height=0-1.0,texture2Color=#RRGGBB,texture2Offset=0.05-0.2,texture3Height=0-1.0,texture3Color=#RRGGBB,texture3Offset=0.05-0.2)
                         - Applies 1-3 color(s) to different height ranges of the terrain
@@ -347,17 +348,52 @@ public class LLMController : MonoBehaviour
 
                 case "AddWater":
                     terrainGenerator.waterHeight = ClampParameter(float.Parse(paramDict["height"]), 0f, 1f, "height");
-                    terrainGenerator.AddWater();
+                    if (paramDict.ContainsKey("color"))
+                    {
+                        string colorHex = paramDict["color"].TrimStart('#');
+                        Color deepColor = new Color(
+                            Convert.ToInt32(colorHex.Substring(0, 2), 16) / 255f,
+                            Convert.ToInt32(colorHex.Substring(2, 2), 16) / 255f,
+                            Convert.ToInt32(colorHex.Substring(4, 2), 16) / 255f
+                        ); 
+                        // lighter color for shallow water
+                        Color shallowColor = new Color(
+                            Mathf.Min(deepColor.r + 0.2f, 1f),
+                            Mathf.Min(deepColor.g + 0.2f, 1f),
+                            Mathf.Min(deepColor.b + 0.2f, 1f)
+                        );
+
+                        terrainGenerator.AddWater();
+
+                        // update material
+                        GameObject water = GameObject.Find("water");
+                        if (water != null)
+                        {
+                            MeshRenderer renderer = water.GetComponent<MeshRenderer>();
+                            if (renderer != null)
+                            {
+                                // Create a new material
+                                Material waterMat = new Material(renderer.sharedMaterial);
+                                
+                                waterMat.SetColor("_Deep_Water_Color", deepColor);
+                                waterMat.SetColor("_Shallow_Water_Color", shallowColor);
+                                
+                                renderer.material = waterMat;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        terrainGenerator.AddWater();
+                    }
                     break;
 
                 case "AddSplatMaps":
                     int textureCount = paramDict.Count / 3; // height, color, and offset for each texture
                     terrainGenerator.splatHeights.Clear();
-                    
-                    // Create TerrainLayer array
                     TerrainLayer[] terrainLayers = new TerrainLayer[textureCount];
                     
-                    // Sort the textures by height to ensure proper layering
+                    // Sort the textures by height
                     var heightPairs = new List<(int index, float height)>();
                     for (int i = 0; i < textureCount; i++) {
                         float height = ClampParameter(float.Parse(paramDict[$"texture{i+1}Height"]), 0f, 1f, $"texture{i+1}Height");
@@ -378,7 +414,6 @@ public class LLMController : MonoBehaviour
                             Convert.ToInt32(colorHex.Substring(4, 2), 16) / 255f
                         );
                         
-                        // Create texture with more resolution
                         Texture2D tex = new Texture2D(512, 512, TextureFormat.RGB24, false);
                         Color[] colors = new Color[512 * 512];
                         for (int p = 0; p < colors.Length; p++) {

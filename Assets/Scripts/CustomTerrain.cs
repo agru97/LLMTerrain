@@ -614,7 +614,7 @@ public class CustomTerrain : MonoBehaviour {
             waterHeight * terrainData.size.y,
             terrainData.size.z / 2.0f);
 
-        water.transform.localScale = new Vector3(terrainData.size.x, 1.0f, terrainData.size.z);
+        // water.transform.localScale = new Vector3(terrainData.size.x, 1.0f, terrainData.size.z);
     }
 
     public void PlantVegetation() {
@@ -722,101 +722,87 @@ public class CustomTerrain : MonoBehaviour {
         vegetation = keptvegetation;
     }
 
-    public void SplatMaps() {
+public void SplatMaps() {
+    int tah = terrainData.alphamapHeight;
+    int taw = terrainData.alphamapWidth;
+    int aml = terrainData.alphamapLayers;
 
-        int tah = terrainData.alphamapHeight;
-        int taw = terrainData.alphamapWidth;
-        int aml = terrainData.alphamapLayers;
+    TerrainLayer[] newSplatPrototypes;
+    newSplatPrototypes = new TerrainLayer[splatHeights.Count];
+    int spIndex = 0;
 
-        TerrainLayer[] newSplatPrototypes;
+    foreach (SplatHeights sh in splatHeights) {
+        newSplatPrototypes[spIndex] = new TerrainLayer {
+            diffuseTexture = sh.texture,
+            normalMapTexture = sh.textureNormalMap,
+            tileOffset = sh.tileOffset,
+            tileSize = sh.tileSize
+        };
 
-        newSplatPrototypes = new TerrainLayer[splatHeights.Count];
-        int spIndex = 0;
+        newSplatPrototypes[spIndex].diffuseTexture.Apply(true);
+        string path = "Assets/New Terrain Layer " + spIndex + ".terrainlayer";
+        AssetDatabase.CreateAsset(newSplatPrototypes[spIndex], path);
+        spIndex++;
+        Selection.activeObject = this.gameObject;
+    }
+    terrainData.terrainLayers = newSplatPrototypes;
 
-        foreach (SplatHeights sh in splatHeights) {
+    float[,,] splatmapData = new float[tah, taw, aml];
+    float[,] heightMap = terrainData.GetHeights(0, 0, terrainData.heightmapResolution, terrainData.heightmapResolution);
 
-            newSplatPrototypes[spIndex] = new TerrainLayer {
+    for (int y = 0; y < tah; y++) {
+        for (int x = 0; x < taw; x++) {
+            // Get normalized coordinates for steepness calculation
+            float normX = x * 1.0f / (taw - 1);
+            float normY = y * 1.0f / (tah - 1);
+            
+            // Calculate the corresponding heightmap coordinates
+            int hmX = (int)(x * (float)terrainData.heightmapResolution / taw);
+            int hmY = (int)(y * (float)terrainData.heightmapResolution / tah);
+            
+            float height = heightMap[hmY, hmX];
+            float steepness = terrainData.GetSteepness(normX, normY);
 
-                diffuseTexture = sh.texture,
-                normalMapTexture = sh.textureNormalMap,
-                tileOffset = sh.tileOffset,
-                tileSize = sh.tileSize
-            };
+            float[] splat = new float[aml];
+            bool emptySplat = true;
 
-            newSplatPrototypes[spIndex].diffuseTexture.Apply(true);
-            string path = "Assets/New Terrain Layer " + spIndex + ".terrainlayer";
-            AssetDatabase.CreateAsset(newSplatPrototypes[spIndex], path);
-            spIndex++;
-            Selection.activeObject = this.gameObject;
-        }
-        terrainData.terrainLayers = newSplatPrototypes;
+            for (int i = 0; i < splatHeights.Count; i++) {
+                float noise = Mathf.PerlinNoise(x * splatHeights[i].splatNoiseXScale,
+                                              y * splatHeights[i].splatNoiseYScale) *
+                                              splatHeights[i].splatNoiseZScale;
 
-        //USE HEIGHTMAP RESOLUTION HERE
-        float[,] heightMap = terrainData.GetHeights(0, 0, HMR, HMR);
+                float offset = splatHeights[i].splatOffset + noise;
+                float thisHeightStart = splatHeights[i].minHeight - offset;
+                float thisHeightStop = splatHeights[i].maxHeight + offset;
 
-        //USE SPLATMAP RESOLUTUON HERE
-        float[,,] splatmapData = new float[taw, tah, aml];
+                if ((height >= thisHeightStart && height <= thisHeightStop) &&
+                    (steepness >= splatHeights[i].minSlope && steepness <= splatHeights[i].maxSlope)) {
+                    
+                    if (height <= splatHeights[i].minHeight)
+                        splat[i] = 1.0f - Mathf.Abs(height - splatHeights[i].minHeight) / offset;
+                    else if (height >= splatHeights[i].maxHeight)
+                        splat[i] = 1.0f - Mathf.Abs(height - splatHeights[i].maxHeight) / offset;
+                    else
+                        splat[i] = 1;
 
-        for (int y = 0; y < tah; ++y) {
-
-            for (int x = 0; x < tah; ++x) {
-
-                float[] splat = new float[aml];
-                bool emptySplat = true;
-
-                for (int i = 0; i < splatHeights.Count; ++i) {
-
-                    float noise = Mathf.PerlinNoise(x * splatHeights[i].splatNoiseXScale,
-                                                    y * splatHeights[i].splatNoiseYScale) *
-                                                    splatHeights[i].splatNoiseZScale;
-
-                    float offset = splatHeights[i].splatOffset + noise;
-                    float thisHeightStart = splatHeights[i].minHeight - offset;
-                    float thisHeightStop = splatHeights[i].maxHeight + offset;
-
-                    //SCALE FOR RESOLUTION DIFFERENCES
-                    //NOTE: The switching of the x and y is no longer needed here
-                    //Scale between the heightmap resolution and the splatmap resolution
-                    int hmX = y * ((HMR - 1) / tah);
-                    int hmY = y * ((HMR - 1) / tah);
-
-                    float normX = x * 1.0f / (terrainData.alphamapWidth - 1);
-                    float normY = y * 1.0f / (terrainData.alphamapHeight - 1);
-
-                    // Get the steepness value at the normalised coordinate
-                    float steepness = terrainData.GetSteepness(normX, normY);
-
-                    if ((heightMap[hmX, hmY] >= thisHeightStart && heightMap[hmX, hmY] <= thisHeightStop) &&
-                          (steepness >= splatHeights[i].minSlope && steepness <= splatHeights[i].maxSlope)) {
-
-                        if (heightMap[hmX, hmY] <= splatHeights[i].minHeight)
-                            splat[i] = 1.0f - Mathf.Abs(heightMap[hmX, hmY] - splatHeights[i].minHeight) / offset;
-                        else if (heightMap[hmX, hmY] >= splatHeights[i].maxHeight)
-                            splat[i] = 1.0f - Mathf.Abs(heightMap[hmX, hmY] - splatHeights[i].maxHeight) / offset;
-                        else
-                            splat[i] = 1;
-
-                        emptySplat = false;
-                    }
-
+                    emptySplat = false;
                 }
+            }
 
-                NormalizeVector(ref splat);
+            NormalizeVector(ref splat);
 
-                if (emptySplat) {
-
-                    splatmapData[x, y, 0] = 1;
-                }
-                else {
-
-                    for (int j = 0; j < splatHeights.Count; j++) {
-                        splatmapData[y, x, j] = splat[j];
-                    }
+            if (emptySplat) {
+                splatmapData[y, x, 0] = 1;
+            } else {
+                for (int j = 0; j < splatHeights.Count; j++) {
+                    splatmapData[y, x, j] = splat[j];
                 }
             }
         }
-        terrainData.SetAlphamaps(0, 0, splatmapData);
     }
+    
+    terrainData.SetAlphamaps(0, 0, splatmapData);
+}
 
     public void AddNewSplatHeight() {
 
